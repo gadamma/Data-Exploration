@@ -1,0 +1,85 @@
+---
+title: "Research Question: Do higher temperatures causally affect sales?"
+format: 
+  docx:
+    echo: true
+editor: visual
+---
+
+## Data Exploration
+
+I took a look at the data set in Excel in order to look for any missing figures and unrealistic or extreme values. I found all numbers present and no remarkable outliers.
+
+## Variables
+
+In order to estimate the potential causal effect temperature has on weekly sales, the relevant variables must be selected. The independent variable is temperature, while our dependent variable will be weekly_sales.
+
+The date of the data entry will be related to both temperature and weekly sales. This is because certain dates would have higher temperatures simply because of climate or weather patterns, and some weeks will see higher sales due to seasonal events. Not to mention, some years might have notably different temperatures than other years. You can argue then that holiday_flag is a relevant variable to consider as well, however, controlling for date should also control for price fluctuations due to holiday dates. Fuel_price, and subsequently fuel usage, would seem like it would be correlated with temperature and weekly sales. Higher fuel consumption could lead to higher temperatures, and higher fuel prices could lead to customers choosing not to go outside. However, the effect of increased gas usage per week on temperature is so minimal that it is inconsequential, and a quick scatter plot of weekly sales and fuel price does not suggest any correlation. The unemployment rate is not correlated to temperature and will thus not be used in this model. While the same can be said about CPI, I believe it is important to consider the potential effects of inflation on weekly sales. Lastly, location is an important variable to consider as it will affect both sales and temperature. I say location, but this encompasses a broader range of variables, such as culture, local government, and local spending habits.
+
+So, the causal diagram will look like this.
+
+![](dagitty.png){width="460"}
+
+For the model, I will be controlling for date by year, as some years could have harsher temperatures than other years. In order to control for location, I will be implementing fixed effects through store number. This way, we can see the variation within stores themselves. I will also use CPI to adjust weekly sales for inflation by creating a new variable.
+
+## Setting Up
+
+```{r}
+#loading libraries
+library(tidyverse)
+library(fixest)
+library(ggplot2)
+library(vtable)
+library(lubridate)
+library(multcomp)
+
+#pulling the data
+data <- read.csv("Walmart_Sales.csv", header = TRUE)
+
+#creating weekly sales adjusted for inflation variable
+data <- data %>% mutate(Sales_adj = Weekly_Sales*(100/CPI))
+
+#isolating the year from date
+data$Date <- dmy(data$Date)
+data <- data %>% mutate(Year = year(Date))
+
+#summary of data
+sumtable(data)
+
+#check sales distribution
+ggplot(data, aes(x = Sales_adj)) +
+  geom_density()
+```
+
+From here, I was worried that sales would need to be logged if it was skewed, so I checked its distribution with a graph. Based on the graph, there is some skew to the right. However, for the sake of using fixed effects, we will carry on without logging the variable. I originally planned to use a linear model, however I received a negative result on the coefficient with the first model, and after thinking about it, decided to change it as it made no sense intuitively. An increase of one degree if it were 90 degrees out leading to a decrease in sales would make sense, but not if it were 2 degrees out. So, I used a polynomial model so that the effect of temperature on sales differs based on the current temperature.
+
+## The Model and Analysis
+
+```{r}
+model <- feols(Sales_adj ~ Temperature + I(Temperature^2)+ Year | Store, data = data, vcov = ~Store)
+etable(model)
+```
+
+This is the final model that I came up with after taking in the above considerations. In order to interpret this model, we will need to use a specific formula as it differs based on the temperature we are looking at. The following code will take a look at the effect of temperature on weekly sales given that it is 2 degrees.
+
+```{r}
+model %>% glht('Temperature + 2*`I(I(Temperature^2))`*2 = 0') %>% summary()
+```
+
+We see the estimate is 106.1. So we can conclude that, at 2 degrees Fahrenheit, a store will receive \$106.10 more in weekly sales if temperature goes up by one degree than if that same store stays at 2 degrees Fahrenheit, holding the year constant. Here, holding the year constant means the price increase should not be affected by changes in sales due to time. However, one thing to note is that our estimate has a high P-value, which means we cannot confidently say that the relationship between temperature and sales is causal. The P value is the probability that we got our estimate under the assumption that there is no causal relationship between temperature and sales. However, 2 degrees Fahrenheit is quite extreme, so let us test a different temperature that is more common.
+
+```{r}
+model %>% glht('Temperature + 2*`I(I(Temperature^2))`*60 = 0') %>% summary()
+```
+
+Above are the results if we tested for a lovely 60 degrees Fahrenheit. Based on our results, at 60 degrees Fahrenheit, a store will receive \$725.20 less in weekly sales if temperature goes up by one degree than if that same store stays at 60 degrees Fahrenheit, holding the year constant. The P-value here is much lower, so the probability of us receiving this result under the assumption that there is no causal relationship between temperature and sales is close to zero. This implies that there is a causal relationship. Based on the two results we saw above, I can conclude that there is evidence of a causal relationship between temperature and weekly sales, but not at all temperatures.
+
+```{r}
+model %>% glht('Temperature + 2*`I(I(Temperature^2))`*41 = 0') %>% summary()
+```
+
+After running some more tests on values, 41 degrees is when the results start being statistically significant at the 5% level. We also see that the coefficient is negative, indicating a negative effect on sales. The maximum value of temperature we have in our data is 100 degrees Fahrenheit, so that will be the upper limit in our range.
+
+## Conclusion
+
+Based on our model and results, I can conclude that, between the ranges of 41 and 100 degrees Fahrenheit, there is evidence to support that higher temperatures negatively affect weekly sales. I came to this conclusion through our polynomial model that produces different results based on the temperature we are testing for. The model also had a fixed effect based on the store number, meaning we are observing the variation of data within the stores themselves and not against each other. This helps control for location-based variables that could have otherwise biased our results. I also controlled for year in order to remove variables related to time that could have biased our results.
